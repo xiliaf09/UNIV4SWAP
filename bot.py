@@ -343,6 +343,26 @@ class ClankerSniper:
 
             await asyncio.sleep(2)  # Attendre 2 secondes entre chaque vérification
 
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        data = query.data
+        if data == 'status':
+            await self.status(update, context)
+        elif data == 'settings':
+            await query.answer("Fonctionnalité à venir !", show_alert=True)
+        elif data == 'add_fid':
+            await query.answer("Utilisez la commande /add_fid <fid> dans le chat.", show_alert=True)
+        elif data == 'add_ticker':
+            await query.answer("Utilisez la commande /add_ticker <ticker> dans le chat.", show_alert=True)
+        elif data == 'add_address':
+            await query.answer("Utilisez la commande /add_address <adresse> dans le chat.", show_alert=True)
+        elif data == 'remove_filter':
+            await query.answer("Utilisez la commande /remove_filter <type> <valeur> dans le chat.", show_alert=True)
+        elif data == 'set_amount':
+            await query.answer("Utilisez la commande /set_amount <montant> dans le chat.", show_alert=True)
+        else:
+            await query.answer("Bouton non reconnu.", show_alert=True)
+
 def main():
     """Point d'entrée principal du bot"""
     # Créer l'application Telegram
@@ -359,6 +379,7 @@ def main():
     application.add_handler(CommandHandler("add_address", sniper.add_address))
     application.add_handler(CommandHandler("remove_filter", sniper.remove_filter))
     application.add_handler(CommandHandler("set_amount", sniper.set_snipe_amount))
+    application.add_handler(CallbackQueryHandler(sniper.handle_callback))
     
     # Fonction pour démarrer le monitoring après l'initialisation du bot
     async def post_init(application: Application) -> None:
