@@ -6,7 +6,7 @@ import os
 from typing import Dict, Set
 from decimal import Decimal
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 import httpx
 from web3 import Web3
@@ -51,6 +51,8 @@ WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
 
 # États pour les conversations
 ADD_FID, ADD_TICKER, ADD_ADDRESS, SET_AMOUNT = range(4)
+
+CANCEL_BUTTON = ReplyKeyboardMarkup([[KeyboardButton("❌ Annuler")]], one_time_keyboard=True, resize_keyboard=True)
 
 class ClankerSniper:
     def __init__(self):
@@ -349,71 +351,112 @@ class ClankerSniper:
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         data = query.data
+
+        # Empêcher toute nouvelle action si une conversation est active
+        if context.user_data.get('in_conversation', False):
+            await query.answer("⚠️ Termine d'abord l'action en cours ou annule-la avec /cancel.", show_alert=True)
+            return ConversationHandler.END
+
+        # Marquer qu'une conversation commence
+        context.user_data['in_conversation'] = True
+        context.user_data['conversation_type'] = data
+
         if data == 'status':
             await self.status(update, context)
+            context.user_data['in_conversation'] = False
         elif data == 'settings':
             await query.answer("Fonctionnalité à venir !", show_alert=True)
+            context.user_data['in_conversation'] = False
         elif data == 'add_fid':
             await query.answer()
-            await query.message.reply_text("Merci d'entrer le FID à ajouter :")
+            await query.message.reply_text("Merci d'entrer le FID à ajouter :", reply_markup=CANCEL_BUTTON)
             return ADD_FID
         elif data == 'add_ticker':
             await query.answer()
-            await query.message.reply_text("Merci d'entrer le ticker à ajouter :")
+            await query.message.reply_text("Merci d'entrer le ticker à ajouter :", reply_markup=CANCEL_BUTTON)
             return ADD_TICKER
         elif data == 'add_address':
             await query.answer()
-            await query.message.reply_text("Merci d'entrer l'adresse à ajouter :")
+            await query.message.reply_text("Merci d'entrer l'adresse à ajouter :", reply_markup=CANCEL_BUTTON)
             return ADD_ADDRESS
         elif data == 'remove_filter':
             await query.answer("Utilisez la commande /remove_filter <type> <valeur> dans le chat.", show_alert=True)
+            context.user_data['in_conversation'] = False
         elif data == 'set_amount':
             await query.answer()
-            await query.message.reply_text("Merci d'entrer le montant de sniping en ETH :")
+            await query.message.reply_text("Merci d'entrer le montant de sniping en ETH :", reply_markup=CANCEL_BUTTON)
             return SET_AMOUNT
         else:
             await query.answer("Bouton non reconnu.", show_alert=True)
+            context.user_data['in_conversation'] = False
 
     # --- Conversation states ---
     async def receive_fid(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        fid = update.message.text.strip()
-        if not fid.isdigit():
-            await update.message.reply_text("❌ Le FID doit être un nombre. Réessaie :")
+        text = update.message.text.strip()
+        if text == "❌ Annuler":
+            await update.message.reply_text("Action annulée.", reply_markup=ReplyKeyboardRemove())
+            context.user_data['in_conversation'] = False
+            return ConversationHandler.END
+        if not text.isdigit():
+            await update.message.reply_text("❌ Le FID doit être un nombre. Réessaie ou tape /cancel.", reply_markup=CANCEL_BUTTON)
             return ADD_FID
-        WATCHED_FIDS.add(fid)
-        await update.message.reply_text(f"✅ FID {fid} ajouté à la liste de surveillance !")
+        WATCHED_FIDS.add(text)
+        await update.message.reply_text(f"✅ FID {text} ajouté à la liste de surveillance !", reply_markup=ReplyKeyboardRemove())
+        context.user_data['in_conversation'] = False
         return ConversationHandler.END
 
     async def receive_ticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        ticker = update.message.text.strip().upper()
+        text = update.message.text.strip()
+        if text == "❌ Annuler":
+            await update.message.reply_text("Action annulée.", reply_markup=ReplyKeyboardRemove())
+            context.user_data['in_conversation'] = False
+            return ConversationHandler.END
+        ticker = text.upper()
         if not ticker.isalnum():
-            await update.message.reply_text("❌ Le ticker doit être alphanumérique. Réessaie :")
+            await update.message.reply_text("❌ Le ticker doit être alphanumérique. Réessaie ou tape /cancel.", reply_markup=CANCEL_BUTTON)
             return ADD_TICKER
         WATCHED_TICKERS.add(ticker)
-        await update.message.reply_text(f"✅ Ticker {ticker} ajouté à la liste de surveillance !")
+        await update.message.reply_text(f"✅ Ticker {ticker} ajouté à la liste de surveillance !", reply_markup=ReplyKeyboardRemove())
+        context.user_data['in_conversation'] = False
         return ConversationHandler.END
 
     async def receive_address(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        address = update.message.text.strip()
-        if not w3.is_address(address):
-            await update.message.reply_text("❌ Adresse invalide. Réessaie :")
+        text = update.message.text.strip()
+        if text == "❌ Annuler":
+            await update.message.reply_text("Action annulée.", reply_markup=ReplyKeyboardRemove())
+            context.user_data['in_conversation'] = False
+            return ConversationHandler.END
+        if not w3.is_address(text):
+            await update.message.reply_text("❌ Adresse invalide. Réessaie ou tape /cancel.", reply_markup=CANCEL_BUTTON)
             return ADD_ADDRESS
-        WATCHED_ADDRESSES.add(address.lower())
-        await update.message.reply_text(f"✅ Adresse {address} ajoutée à la liste de surveillance !")
+        WATCHED_ADDRESSES.add(text.lower())
+        await update.message.reply_text(f"✅ Adresse {text} ajoutée à la liste de surveillance !", reply_markup=ReplyKeyboardRemove())
+        context.user_data['in_conversation'] = False
         return ConversationHandler.END
 
     async def receive_amount(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = update.message.text.strip()
+        if text == "❌ Annuler":
+            await update.message.reply_text("Action annulée.", reply_markup=ReplyKeyboardRemove())
+            context.user_data['in_conversation'] = False
+            return ConversationHandler.END
         try:
-            amount = float(update.message.text.strip())
+            amount = float(text)
             if amount <= 0:
-                await update.message.reply_text("❌ Le montant doit être supérieur à 0. Réessaie :")
+                await update.message.reply_text("❌ Le montant doit être supérieur à 0. Réessaie ou tape /cancel.", reply_markup=CANCEL_BUTTON)
                 return SET_AMOUNT
             self.snipe_amount = amount
-            await update.message.reply_text(f"✅ Montant de sniping configuré à {amount} ETH")
+            await update.message.reply_text(f"✅ Montant de sniping configuré à {amount} ETH", reply_markup=ReplyKeyboardRemove())
+            context.user_data['in_conversation'] = False
             return ConversationHandler.END
         except ValueError:
-            await update.message.reply_text("❌ Montant invalide. Réessaie :")
+            await update.message.reply_text("❌ Montant invalide. Réessaie ou tape /cancel.", reply_markup=CANCEL_BUTTON)
             return SET_AMOUNT
+
+    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text("Action annulée.", reply_markup=ReplyKeyboardRemove())
+        context.user_data['in_conversation'] = False
+        return ConversationHandler.END
 
 def main():
     """Point d'entrée principal du bot"""
@@ -427,22 +470,22 @@ def main():
     conv_fid = ConversationHandler(
         entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^add_fid$')],
         states={ADD_FID: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_fid)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", sniper.cancel), MessageHandler(filters.Regex("^❌ Annuler$"), sniper.cancel)],
     )
     conv_ticker = ConversationHandler(
         entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^add_ticker$')],
         states={ADD_TICKER: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_ticker)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", sniper.cancel), MessageHandler(filters.Regex("^❌ Annuler$"), sniper.cancel)],
     )
     conv_address = ConversationHandler(
         entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^add_address$')],
         states={ADD_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_address)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", sniper.cancel), MessageHandler(filters.Regex("^❌ Annuler$"), sniper.cancel)],
     )
     conv_amount = ConversationHandler(
         entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^set_amount$')],
         states={SET_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_amount)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", sniper.cancel), MessageHandler(filters.Regex("^❌ Annuler$"), sniper.cancel)],
     )
     # Handlers classiques
     application.add_handler(conv_fid)
