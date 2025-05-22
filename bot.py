@@ -63,7 +63,7 @@ ROUTER_V3_ABI = [
 ]
 
 # États pour les conversations
-ADD_FID, ADD_TICKER, ADD_ADDRESS, SET_AMOUNT = range(4)
+ADD_FID, ADD_TICKER, ADD_ADDRESS, SET_AMOUNT, TEST_TX_ADDR, TEST_TX_AMOUNT = range(6)
 
 CANCEL_BUTTON = ReplyKeyboardMarkup([[KeyboardButton("❌ Annuler")]], one_time_keyboard=True, resize_keyboard=True)
 
@@ -108,6 +108,13 @@ class ClankerSniper:
             [
                 InlineKeyboardButton("🔍 Add Address", callback_data='add_address'),
                 InlineKeyboardButton("❌ Remove Filter", callback_data='remove_filter')
+            ],
+            [
+                InlineKeyboardButton("💰 Wallet Status", callback_data='wallet_status'),
+                InlineKeyboardButton("🕒 Snipes en attente", callback_data='pending_snipes')
+            ],
+            [
+                InlineKeyboardButton("🧪 Test TX", callback_data='test_tx')
             ],
             [
                 InlineKeyboardButton("💰 Set Snipe Amount", callback_data='set_amount')
@@ -393,6 +400,18 @@ class ClankerSniper:
             await query.answer()
             await query.message.reply_text("Merci d'entrer le montant de sniping en ETH :", reply_markup=CANCEL_BUTTON)
             return SET_AMOUNT
+        elif data == 'wallet_status':
+            await query.answer()
+            await self.wallet_status(query, context)
+            context.user_data['in_conversation'] = False
+        elif data == 'pending_snipes':
+            await query.answer()
+            await self.pending_snipes(query, context)
+            context.user_data['in_conversation'] = False
+        elif data == 'test_tx':
+            await query.answer()
+            await query.message.reply_text("Merci d'entrer l'adresse du token Clanker à tester :", reply_markup=CANCEL_BUTTON)
+            return TEST_TX_ADDR
         else:
             await query.answer("Bouton non reconnu.", show_alert=True)
             context.user_data['in_conversation'] = False
@@ -465,6 +484,100 @@ class ClankerSniper:
         context.user_data['in_conversation'] = False
         return ConversationHandler.END
 
+    async def wallet_status(self, query, context):
+        try:
+            balance = w3.eth.get_balance(WALLET_ADDRESS)
+            balance_eth = w3.from_wei(balance, 'ether')
+            msg = f"💰 **Wallet Status**\n\nAdresse : `{WALLET_ADDRESS}`\nSolde : {balance_eth:.4f} ETH"
+            await query.message.reply_text(msg, parse_mode='Markdown')
+        except Exception as e:
+            await query.message.reply_text(f"Erreur lors de la récupération du solde : {e}")
+
+    async def pending_snipes(self, query, context):
+        if not self.active_snipes:
+            await query.message.reply_text("Aucun snipe en attente ou actif.")
+            return
+        msg = "🕒 **Snipes en attente/actifs :**\n"
+        for token, info in self.active_snipes.items():
+            status = info.get('status', 'En attente')
+            msg += f"• {token} : {status}\n"
+        await query.message.reply_text(msg)
+
+    # --- Test TX conversation ---
+    async def test_tx_addr(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = update.message.text.strip()
+        if text == "❌ Annuler":
+            await update.message.reply_text("Action annulée.", reply_markup=ReplyKeyboardRemove())
+            context.user_data['in_conversation'] = False
+            return ConversationHandler.END
+        if not w3.is_address(text):
+            await update.message.reply_text("❌ Adresse invalide. Réessaie ou tape /cancel.", reply_markup=CANCEL_BUTTON)
+            return TEST_TX_ADDR
+        context.user_data['test_tx_token'] = text
+        await update.message.reply_text("Merci d'entrer le montant en ETH à utiliser pour le test :", reply_markup=CANCEL_BUTTON)
+        return TEST_TX_AMOUNT
+
+    async def test_tx_amount(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = update.message.text.strip()
+        if text == "❌ Annuler":
+            await update.message.reply_text("Action annulée.", reply_markup=ReplyKeyboardRemove())
+            context.user_data['in_conversation'] = False
+            return ConversationHandler.END
+        try:
+            amount = float(text)
+            if amount <= 0:
+                await update.message.reply_text("❌ Le montant doit être supérieur à 0. Réessaie ou tape /cancel.", reply_markup=CANCEL_BUTTON)
+                return TEST_TX_AMOUNT
+            token_address = context.user_data.get('test_tx_token')
+            await update.message.reply_text("⏳ Test d'achat en cours...", reply_markup=ReplyKeyboardRemove())
+            # Appel la fonction de snipe avec le montant custom
+            result, tx_hash = await self.test_snipe(token_address, amount)
+            if result:
+                await update.message.reply_text(f"✅ Test d'achat réussi !\nTx : https://basescan.org/tx/{tx_hash}")
+            else:
+                await update.message.reply_text(f"❌ Test d'achat échoué. Voir logs pour détails.")
+            context.user_data['in_conversation'] = False
+            return ConversationHandler.END
+        except ValueError:
+            await update.message.reply_text("❌ Montant invalide. Réessaie ou tape /cancel.", reply_markup=CANCEL_BUTTON)
+            return TEST_TX_AMOUNT
+
+    async def test_snipe(self, token_address: str, amount_eth: float):
+        try:
+            balance = w3.eth.get_balance(WALLET_ADDRESS)
+            if w3.from_wei(balance, 'ether') < amount_eth:
+                return False, None
+            amount_in = w3.to_wei(amount_eth, 'ether')
+            fee = 3000
+            deadline = w3.eth.get_block('latest').timestamp + 300
+            params = {
+                'tokenIn': WETH_ADDRESS,
+                'tokenOut': token_address,
+                'fee': fee,
+                'recipient': WALLET_ADDRESS,
+                'deadline': deadline,
+                'amountIn': amount_in,
+                'amountOutMinimum': 0,
+                'sqrtPriceLimitX96': 0
+            }
+            tx = self.router.functions.exactInputSingle(params).build_transaction({
+                'from': WALLET_ADDRESS,
+                'value': amount_in,
+                'gas': DEFAULT_GAS_LIMIT,
+                'gasPrice': int(w3.eth.gas_price * DEFAULT_GAS_PRICE),
+                'nonce': w3.eth.get_transaction_count(WALLET_ADDRESS),
+            })
+            signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+            if receipt.status == 1:
+                return True, tx_hash.hex()
+            else:
+                return False, tx_hash.hex()
+        except Exception as e:
+            logger.error(f"Erreur test_snipe : {e}")
+            return False, None
+
 def main():
     """Point d'entrée principal du bot"""
     # Créer l'application Telegram
@@ -494,11 +607,20 @@ def main():
         states={SET_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_amount)]},
         fallbacks=[CommandHandler("cancel", sniper.cancel), MessageHandler(filters.Regex("^❌ Annuler$"), sniper.cancel)],
     )
+    conv_test_tx = ConversationHandler(
+        entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^test_tx$')],
+        states={
+            TEST_TX_ADDR: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.test_tx_addr)],
+            TEST_TX_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.test_tx_amount)]
+        },
+        fallbacks=[CommandHandler("cancel", sniper.cancel), MessageHandler(filters.Regex("^❌ Annuler$"), sniper.cancel)],
+    )
     # Handlers classiques
     application.add_handler(conv_fid)
     application.add_handler(conv_ticker)
     application.add_handler(conv_address)
     application.add_handler(conv_amount)
+    application.add_handler(conv_test_tx)
     application.add_handler(CommandHandler("start", sniper.start))
     application.add_handler(CommandHandler("status", sniper.status))
     application.add_handler(CommandHandler("add_fid", sniper.add_fid))
