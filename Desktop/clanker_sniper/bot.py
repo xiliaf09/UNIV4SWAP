@@ -14,8 +14,9 @@ from web3 import Web3
 from web3.middleware import geth_poa_middleware
 
 from config import *
+from config import NOTIFY_ON_NEW_TOKEN, NOTIFY_ON_ERROR
 
-DEFAULT_GAS_LIMIT = 300000  # fallback local pour éviter tout NameError
+DEFAULT_GAS_LIMIT = 300000  # Sécurité locale
 
 # Configuration du logging
 logging.basicConfig(
