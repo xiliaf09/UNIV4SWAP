@@ -5,6 +5,7 @@ import json
 import os
 from typing import Dict, Set
 from decimal import Decimal
+import traceback
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
@@ -546,8 +547,11 @@ class ClankerSniper:
 
     async def test_snipe(self, token_address: str, amount_eth: float):
         try:
+            logger.info(f"[TEST_SNIPE] Début test snipe: token={token_address}, amount_eth={amount_eth}")
             balance = w3.eth.get_balance(WALLET_ADDRESS)
+            logger.info(f"[TEST_SNIPE] Solde wallet: {w3.from_wei(balance, 'ether')} ETH")
             if w3.from_wei(balance, 'ether') < amount_eth:
+                logger.error("[TEST_SNIPE] Solde insuffisant pour le test snipe.")
                 return False, None
             amount_in = w3.to_wei(amount_eth, 'ether')
             fee = 3000
@@ -562,6 +566,7 @@ class ClankerSniper:
                 'amountOutMinimum': 0,
                 'sqrtPriceLimitX96': 0
             }
+            logger.info(f"[TEST_SNIPE] Params Uniswap: {params}")
             tx = self.router.functions.exactInputSingle(params).build_transaction({
                 'from': WALLET_ADDRESS,
                 'value': amount_in,
@@ -569,15 +574,21 @@ class ClankerSniper:
                 'gasPrice': int(w3.eth.gas_price * DEFAULT_GAS_PRICE),
                 'nonce': w3.eth.get_transaction_count(WALLET_ADDRESS),
             })
+            logger.info(f"[TEST_SNIPE] Transaction construite: {tx}")
             signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
+            logger.info(f"[TEST_SNIPE] Transaction signée. Hash: {signed_tx.hash.hex() if hasattr(signed_tx, 'hash') else 'N/A'}")
             tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            logger.info(f"[TEST_SNIPE] Transaction envoyée. Hash: {tx_hash.hex()}")
             receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+            logger.info(f"[TEST_SNIPE] Receipt: {receipt}")
             if receipt.status == 1:
+                logger.info(f"[TEST_SNIPE] Test snipe réussi. Tx: {tx_hash.hex()}")
                 return True, tx_hash.hex()
             else:
+                logger.error(f"[TEST_SNIPE] Test snipe échoué. Receipt: {receipt}")
                 return False, tx_hash.hex()
         except Exception as e:
-            logger.error(f"Erreur test_snipe : {e}")
+            logger.error(f"[TEST_SNIPE] Erreur test_snipe : {type(e).__name__}: {e}\n{traceback.format_exc()}")
             return False, None
 
 def main():
