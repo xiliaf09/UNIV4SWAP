@@ -29,25 +29,38 @@ logger = logging.getLogger(__name__)
 w3 = Web3(Web3.HTTPProvider(BASE_RPC_URL))
 w3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
-# ABI minimal pour le router Uniswap V2
-ROUTER_ABI = [
+# Adresse du router Uniswap V3 sur Base
+ROUTER_V3_ADDRESS = Web3.to_checksum_address("0x5615CDAb10dc425a742d643d949a7F474C01abc4")
+WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
+
+# ABI minimal pour Uniswap V3 exactInputSingle
+ROUTER_V3_ABI = [
     {
         "inputs": [
-            {"internalType": "uint256", "name": "amountOutMin", "type": "uint256"},
-            {"internalType": "address[]", "name": "path", "type": "address[]"},
-            {"internalType": "address", "name": "to", "type": "address"},
-            {"internalType": "uint256", "name": "deadline", "type": "uint256"}
+            {
+                "components": [
+                    {"internalType": "address", "name": "tokenIn", "type": "address"},
+                    {"internalType": "address", "name": "tokenOut", "type": "address"},
+                    {"internalType": "uint24", "name": "fee", "type": "uint24"},
+                    {"internalType": "address", "name": "recipient", "type": "address"},
+                    {"internalType": "uint256", "name": "deadline", "type": "uint256"},
+                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
+                    {"internalType": "uint256", "name": "amountOutMinimum", "type": "uint256"},
+                    {"internalType": "uint160", "name": "sqrtPriceLimitX96", "type": "uint160"}
+                ],
+                "internalType": "struct ISwapRouter.ExactInputSingleParams",
+                "name": "params",
+                "type": "tuple"
+            }
         ],
-        "name": "swapExactETHForTokens",
-        "outputs": [{"internalType": "uint256[]", "name": "amounts", "type": "uint256[]"}],
+        "name": "exactInputSingle",
+        "outputs": [
+            {"internalType": "uint256", "name": "amountOut", "type": "uint256"}
+        ],
         "stateMutability": "payable",
         "type": "function"
     }
 ]
-
-# Adresse du router Uniswap V2 sur Base
-ROUTER_ADDRESS = Web3.to_checksum_address("0x327df1e6de05895d2ab08513aadd9313fe505d86")
-WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
 
 # États pour les conversations
 ADD_FID, ADD_TICKER, ADD_ADDRESS, SET_AMOUNT = range(4)
@@ -61,8 +74,8 @@ class ClankerSniper:
         self.snipe_amount = DEFAULT_SNIPE_AMOUNT
         self.load_seen_tokens()
         
-        # Initialiser le router
-        self.router = w3.eth.contract(address=ROUTER_ADDRESS, abi=ROUTER_ABI)
+        # Initialiser le router V3
+        self.router = w3.eth.contract(address=ROUTER_V3_ADDRESS, abi=ROUTER_V3_ABI)
 
     def load_seen_tokens(self):
         """Charge les tokens déjà vus depuis le fichier."""
@@ -239,49 +252,43 @@ class ClankerSniper:
             await update.message.reply_text("❌ Type de filtre invalide. Utilisez 'fid', 'ticker' ou 'address'.")
 
     async def execute_snipe(self, token_address: str, token_data: Dict):
-        """Exécute le sniping d'un token"""
+        """Exécute le sniping d'un token via Uniswap V3"""
         try:
-            # Vérifier la balance
             balance = w3.eth.get_balance(WALLET_ADDRESS)
             balance_eth = w3.from_wei(balance, 'ether')
-            
             if balance_eth < self.snipe_amount:
                 logger.error(f"Insufficient balance for snipe: {balance_eth} ETH")
                 return False
-                
-            # Préparer la transaction
             amount_in = w3.to_wei(self.snipe_amount, 'ether')
-            path = [WETH_ADDRESS, token_address]
-            deadline = w3.eth.get_block('latest').timestamp + 300  # 5 minutes
-            
-            # Construire la transaction
-            tx = self.router.functions.swapExactETHForTokens(
-                0,  # amountOutMin (0 car slippage max)
-                path,
-                WALLET_ADDRESS,
-                deadline
-            ).build_transaction({
+            # Fee tier par défaut : 3000 (0.3%)
+            fee = 3000  # Adapter ici si besoin
+            deadline = w3.eth.get_block('latest').timestamp + 300
+            params = {
+                'tokenIn': WETH_ADDRESS,
+                'tokenOut': token_address,
+                'fee': fee,
+                'recipient': WALLET_ADDRESS,
+                'deadline': deadline,
+                'amountIn': amount_in,
+                'amountOutMinimum': 0,  # slippage max, à sécuriser si besoin
+                'sqrtPriceLimitX96': 0
+            }
+            tx = self.router.functions.exactInputSingle(params).build_transaction({
                 'from': WALLET_ADDRESS,
                 'value': amount_in,
                 'gas': DEFAULT_GAS_LIMIT,
                 'gasPrice': int(w3.eth.gas_price * DEFAULT_GAS_PRICE),
                 'nonce': w3.eth.get_transaction_count(WALLET_ADDRESS),
             })
-            
-            # Signer et envoyer la transaction
             signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
             tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
-            
-            # Attendre la confirmation
             receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-            
             if receipt.status == 1:
                 logger.info(f"Snipe successful for token {token_address}")
                 return True
             else:
                 logger.error(f"Snipe failed for token {token_address}")
                 return False
-                
         except Exception as e:
             logger.error(f"Error executing snipe: {e}")
             return False
