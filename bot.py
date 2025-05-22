@@ -360,8 +360,12 @@ def main():
     application.add_handler(CommandHandler("remove_filter", sniper.remove_filter))
     application.add_handler(CommandHandler("set_amount", sniper.set_snipe_amount))
     
-    # Démarrer le monitoring Clanker
-    asyncio.create_task(sniper.monitor_clanker())
+    # Démarrer le monitoring Clanker dans l'event loop de l'application
+    application.job_queue.run_repeating(
+        lambda context: asyncio.create_task(sniper.monitor_clanker()),
+        interval=2,
+        first=1
+    )
     
     # Démarrer le bot
     application.run_polling()
