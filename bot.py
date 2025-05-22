@@ -7,7 +7,7 @@ from typing import Dict, Set
 from decimal import Decimal
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 import httpx
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
@@ -48,6 +48,9 @@ ROUTER_ABI = [
 # Adresse du router Uniswap V2 sur Base
 ROUTER_ADDRESS = Web3.to_checksum_address("0x327df1e6de05895d2ab08513aadd9313fe505d86")
 WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
+
+# États pour les conversations
+ADD_FID, ADD_TICKER, ADD_ADDRESS, SET_AMOUNT = range(4)
 
 class ClankerSniper:
     def __init__(self):
@@ -351,17 +354,66 @@ class ClankerSniper:
         elif data == 'settings':
             await query.answer("Fonctionnalité à venir !", show_alert=True)
         elif data == 'add_fid':
-            await query.answer("Utilisez la commande /add_fid <fid> dans le chat.", show_alert=True)
+            await query.answer()
+            await query.message.reply_text("Merci d'entrer le FID à ajouter :")
+            return ADD_FID
         elif data == 'add_ticker':
-            await query.answer("Utilisez la commande /add_ticker <ticker> dans le chat.", show_alert=True)
+            await query.answer()
+            await query.message.reply_text("Merci d'entrer le ticker à ajouter :")
+            return ADD_TICKER
         elif data == 'add_address':
-            await query.answer("Utilisez la commande /add_address <adresse> dans le chat.", show_alert=True)
+            await query.answer()
+            await query.message.reply_text("Merci d'entrer l'adresse à ajouter :")
+            return ADD_ADDRESS
         elif data == 'remove_filter':
             await query.answer("Utilisez la commande /remove_filter <type> <valeur> dans le chat.", show_alert=True)
         elif data == 'set_amount':
-            await query.answer("Utilisez la commande /set_amount <montant> dans le chat.", show_alert=True)
+            await query.answer()
+            await query.message.reply_text("Merci d'entrer le montant de sniping en ETH :")
+            return SET_AMOUNT
         else:
             await query.answer("Bouton non reconnu.", show_alert=True)
+
+    # --- Conversation states ---
+    async def receive_fid(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        fid = update.message.text.strip()
+        if not fid.isdigit():
+            await update.message.reply_text("❌ Le FID doit être un nombre. Réessaie :")
+            return ADD_FID
+        WATCHED_FIDS.add(fid)
+        await update.message.reply_text(f"✅ FID {fid} ajouté à la liste de surveillance !")
+        return ConversationHandler.END
+
+    async def receive_ticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        ticker = update.message.text.strip().upper()
+        if not ticker.isalnum():
+            await update.message.reply_text("❌ Le ticker doit être alphanumérique. Réessaie :")
+            return ADD_TICKER
+        WATCHED_TICKERS.add(ticker)
+        await update.message.reply_text(f"✅ Ticker {ticker} ajouté à la liste de surveillance !")
+        return ConversationHandler.END
+
+    async def receive_address(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        address = update.message.text.strip()
+        if not w3.is_address(address):
+            await update.message.reply_text("❌ Adresse invalide. Réessaie :")
+            return ADD_ADDRESS
+        WATCHED_ADDRESSES.add(address.lower())
+        await update.message.reply_text(f"✅ Adresse {address} ajoutée à la liste de surveillance !")
+        return ConversationHandler.END
+
+    async def receive_amount(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            amount = float(update.message.text.strip())
+            if amount <= 0:
+                await update.message.reply_text("❌ Le montant doit être supérieur à 0. Réessaie :")
+                return SET_AMOUNT
+            self.snipe_amount = amount
+            await update.message.reply_text(f"✅ Montant de sniping configuré à {amount} ETH")
+            return ConversationHandler.END
+        except ValueError:
+            await update.message.reply_text("❌ Montant invalide. Réessaie :")
+            return SET_AMOUNT
 
 def main():
     """Point d'entrée principal du bot"""
@@ -371,7 +423,32 @@ def main():
     # Créer l'instance du sniper
     sniper = ClankerSniper()
     
-    # Ajouter les handlers
+    # ConversationHandlers interactifs
+    conv_fid = ConversationHandler(
+        entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^add_fid$')],
+        states={ADD_FID: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_fid)]},
+        fallbacks=[],
+    )
+    conv_ticker = ConversationHandler(
+        entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^add_ticker$')],
+        states={ADD_TICKER: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_ticker)]},
+        fallbacks=[],
+    )
+    conv_address = ConversationHandler(
+        entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^add_address$')],
+        states={ADD_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_address)]},
+        fallbacks=[],
+    )
+    conv_amount = ConversationHandler(
+        entry_points=[CallbackQueryHandler(sniper.handle_callback, pattern='^set_amount$')],
+        states={SET_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sniper.receive_amount)]},
+        fallbacks=[],
+    )
+    # Handlers classiques
+    application.add_handler(conv_fid)
+    application.add_handler(conv_ticker)
+    application.add_handler(conv_address)
+    application.add_handler(conv_amount)
     application.add_handler(CommandHandler("start", sniper.start))
     application.add_handler(CommandHandler("status", sniper.status))
     application.add_handler(CommandHandler("add_fid", sniper.add_fid))
