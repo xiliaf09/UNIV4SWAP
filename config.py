@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Base Configuration
 BASE_RPC_URL = os.getenv('BASE_RPC_URL', 'https://mainnet.base.org')
